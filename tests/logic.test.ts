@@ -79,3 +79,57 @@ test('noteNames avoids vault names and repeated headings, ignoring case', () => 
     ['Notes', 'notes 2', 'Other 2', 'Notes 3'],
   );
 });
+
+import { findLinkLines, mergeBody, mergedSection } from '../src/logic.ts';
+
+test('findLinkLines finds lines made only of a link or embed', () => {
+  const text = ['# Top', '[[One]]', 'text [[Not]] here', '![[Two|alias]]', '```', '[[InCode]]', '```', '[x](Three%20Note.md)', '[web](https://a.b/c)'].join('\n');
+  const l = findLinkLines(text);
+  assert.deepEqual(
+    l.map((x) => [x.target, x.level]),
+    [
+      ['One', 2],
+      ['Two', 2],
+      ['Three Note', 2],
+    ],
+  );
+  assert.equal(text.slice(l[0].from, l[0].to), '[[One]]');
+});
+
+test('findLinkLines level follows the nearest heading above, 2 without one', () => {
+  assert.equal(findLinkLines('[[A]]')[0].level, 2);
+  assert.equal(findLinkLines('### H\n[[A]]')[0].level, 4);
+  assert.equal(findLinkLines('###### H\n[[A]]')[0].level, 6);
+});
+
+test('findLinkLines limits to a range', () => {
+  const text = '[[A]]\n\n[[B]]';
+  assert.deepEqual(
+    findLinkLines(text, 7, 12).map((x) => x.target),
+    ['B'],
+  );
+});
+
+test('mergeBody drops front matter and outer blank lines', () => {
+  assert.equal(mergeBody('---\na: 1\n---\n\n\ntext\n\n'), 'text');
+  assert.equal(mergeBody('plain\n'), 'plain');
+  assert.equal(mergeBody(''), '');
+});
+
+test('mergedSection puts the heading above the text', () => {
+  assert.equal(mergedSection(2, 'One', 'a'), '## One\n\na');
+  assert.equal(mergedSection(3, 'Empty', ''), '### Empty');
+});
+
+test('split then merge gives back the original text', () => {
+  const text = ['Intro', '', '## Alpha', '', 'a1', '', '## Beta', '', 'b1', ''].join('\n');
+  const secs = sectionsAtLevel(text, 2);
+  const split = applyChanges(text, buildChanges(text, secs, ['[[Alpha]]', '[[Beta]]'], 'link'));
+  const bodies: Record<string, string> = { Alpha: noteContent(secs[0]), Beta: noteContent(secs[1]) };
+  const changes = findLinkLines(split).map((l) => ({
+    from: l.from,
+    to: l.to,
+    insert: mergedSection(l.level, l.target, mergeBody(bodies[l.target])),
+  }));
+  assert.equal(applyChanges(split, changes), text.replace(/\n$/, '\n'));
+});

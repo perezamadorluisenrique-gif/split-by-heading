@@ -10,6 +10,7 @@ Two commands, both in the command palette:
 
 - **Split note by headings (pick level)**: choose a heading level (the picker shows how many notes each level makes) and every heading of that level becomes its own note. Deeper headings stay inside their note.
 - **Split note here (heading above)**: splits only the section under the nearest heading above the cursor.
+- **Merge linked notes back into this note**: the reverse. Every line that holds only a link or embed of another note is replaced by that note's text under a heading named after the note, one level below the heading above it (level 2 when there is none). Select some lines to merge only those. The merged notes are kept unless you turn on "Trash notes after merging them back". One Undo restores the links.
 
 Each new note is named after its heading (characters Obsidian rejects are removed; a taken name gets " 2", " 3"), holds the text under the heading, and sits next to the source note or in the folder you choose. Where a section was, the source gets a link, an embed or nothing, as you choose in the settings. Text before the first heading, front matter and code blocks are left alone.
 

@@ -1,7 +1,7 @@
 import { Editor, FuzzySuggestModal, Notice, Plugin, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import type { App, MarkdownFileInfo, MarkdownView, SettingDefinitionItem, TFile } from 'obsidian';
 
-import { buildChanges, levelCounts, noteContent, noteNames, sectionAt, sectionsAtLevel } from './src/logic.ts';
+import { buildChanges, findLinkLines, levelCounts, mergeBody, mergedSection, noteContent, noteNames, sectionAt, sectionsAtLevel } from './src/logic.ts';
 import type { Leave, Section } from './src/logic.ts';
 
 interface SplitSettings {
@@ -9,9 +9,11 @@ interface SplitSettings {
   folder: string;
   /** What the source keeps where a section was. */
   leave: Leave;
+  /** After merging notes back, move the merged notes to the trash. */
+  trashMerged: boolean;
 }
 
-const DEFAULT_SETTINGS: SplitSettings = { folder: '', leave: 'link' };
+const DEFAULT_SETTINGS: SplitSettings = { folder: '', leave: 'link', trashMerged: false };
 
 /** Pick the heading level to split at. */
 class LevelPicker extends FuzzySuggestModal<number> {
@@ -61,6 +63,12 @@ export default class SplitByHeadingPlugin extends Plugin {
         }
         void this.split(editor, ctx, [section]);
       },
+    });
+    this.addCommand({
+      id: 'merge-back',
+      name: 'Merge linked notes back into this note',
+      icon: 'merge',
+      editorCallback: (editor, ctx) => void this.mergeBack(editor, ctx),
     });
   }
 
@@ -117,6 +125,41 @@ export default class SplitByHeadingPlugin extends Plugin {
     new Notice(`Split into ${created.length} ${created.length === 1 ? 'note' : 'notes'}. Undo restores the source note only.`);
   }
 
+  /** Replaces each line that is only a link or embed of a note with that note under a heading, in one editor transaction. */
+  private async mergeBack(editor: Editor, ctx: MarkdownView | MarkdownFileInfo) {
+    const source = ctx.file;
+    if (!source) return;
+    const original = editor.getValue();
+    const sel = editor.listSelections()[0];
+    const a = editor.posToOffset(sel.anchor);
+    const b = editor.posToOffset(sel.head);
+    // With a selection only its lines are merged; with none, the whole note.
+    const lines = a === b ? findLinkLines(original) : findLinkLines(original, Math.min(a, b), Math.max(a, b));
+
+    const used: TFile[] = [];
+    const changes: { from: number; to: number; insert: string }[] = [];
+    for (const l of lines) {
+      const file = this.app.metadataCache.getFirstLinkpathDest(l.target, source.path);
+      if (!file || file.extension !== 'md' || file.path === source.path) continue;
+      const body = mergeBody(await this.app.vault.cachedRead(file));
+      changes.push({ from: l.from, to: l.to, insert: mergedSection(l.level, file.basename, body) });
+      used.push(file);
+    }
+    if (changes.length === 0) {
+      new Notice('No lines with only a link to another note were found.');
+      return;
+    }
+    if (editor.getValue() !== original) {
+      new Notice('The note changed while merging. Nothing was changed; try again.');
+      return;
+    }
+    editor.transaction({
+      changes: changes.map((c) => ({ from: editor.offsetToPos(c.from), to: editor.offsetToPos(c.to), text: c.insert })),
+    });
+    if (this.settings.trashMerged) await this.discard([...new Set(used)]);
+    new Notice(`Merged ${changes.length} ${changes.length === 1 ? 'note' : 'notes'}.${this.settings.trashMerged ? '' : ' The merged notes were kept.'}`);
+  }
+
   private async discard(files: TFile[]) {
     for (const f of files) {
       try {
@@ -142,6 +185,10 @@ const TEXT = {
     desc: 'Where a section was, the source gets a link to the new note, an embed of it, or nothing.',
   },
 };
+const TEXT_TRASH = {
+  name: 'Trash notes after merging them back',
+  desc: 'The command Merge linked notes back into this note can move the notes it merged to the trash. Off by default.',
+};
 const LEAVE_OPTIONS = { link: 'A link', embed: 'An embed', nothing: 'Nothing' };
 
 class SplitSettingTab extends PluginSettingTab {
@@ -157,6 +204,7 @@ class SplitSettingTab extends PluginSettingTab {
     return [
       { ...TEXT.folder, control: { type: 'text', key: 'folder', defaultValue: DEFAULT_SETTINGS.folder, placeholder: 'Same folder as the note' } },
       { ...TEXT.leave, control: { type: 'dropdown', key: 'leave', defaultValue: DEFAULT_SETTINGS.leave, options: LEAVE_OPTIONS } },
+      { ...TEXT_TRASH, control: { type: 'toggle', key: 'trashMerged', defaultValue: DEFAULT_SETTINGS.trashMerged } },
     ];
   }
 
@@ -190,5 +238,9 @@ class SplitSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.leave)
           .onChange((v) => this.setControlValue('leave', v)),
       );
+    new Setting(containerEl)
+      .setName(TEXT_TRASH.name)
+      .setDesc(TEXT_TRASH.desc)
+      .addToggle((t) => t.setValue(this.plugin.settings.trashMerged).onChange((v) => this.setControlValue('trashMerged', v)));
   }
 }

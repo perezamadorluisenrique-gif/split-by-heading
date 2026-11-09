@@ -167,3 +167,75 @@ export function applyChanges(text: string, changes: Change[]): string {
   for (const c of [...changes].sort((a, b) => b.from - a.from)) out = out.slice(0, c.from) + c.insert + out.slice(c.to);
   return out;
 }
+
+/** A line that holds only a link or embed of a note, which is what a split leaves behind. */
+export interface LinkLine {
+  from: number;
+  to: number;
+  /** Link target as written, without alias, heading or block part. */
+  target: string;
+  /** Heading level for the merged text: one below the nearest heading above, 2 when there is none. */
+  level: number;
+}
+
+const WIKI_LINE = /^\s*!?\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]\s*$/;
+const MD_LINE = /^\s*!?\[[^\]]*\]\(([^)\s]+?)(?:\.md)?(?:#[^)\s]*)?\)\s*$/;
+
+/** Lines made only of a link or embed to another note, outside front matter and code blocks, within [from, to]. */
+export function findLinkLines(text: string, from = 0, to = text.length): LinkLine[] {
+  const headings = findHeadings(text);
+  const out: LinkLine[] = [];
+  let offset = 0;
+  let fence: string | null = null;
+  let inFront = false;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.replace(/\r$/, '');
+    const start = offset;
+    const end = offset + line.length;
+    offset += raw.length + 1;
+    if (i === 0 && line === '---') {
+      inFront = true;
+      continue;
+    }
+    if (inFront) {
+      if (line === '---' || line === '...') inFront = false;
+      continue;
+    }
+    const f = FENCE.exec(line);
+    if (fence) {
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length && line.trim() === f[1]) fence = null;
+      continue;
+    }
+    if (f) {
+      fence = f[1];
+      continue;
+    }
+    if (end < from || start > to) continue;
+    const m = WIKI_LINE.exec(line) ?? MD_LINE.exec(line);
+    if (!m) continue;
+    let target = m[1].trim();
+    try {
+      target = decodeURIComponent(target);
+    } catch {
+      // keep the raw target
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue; // a web address, not a note
+    let above = 0;
+    for (const h of headings) if (h.from < start) above = h.level;
+    out.push({ from: start, to: end, target, level: above ? Math.min(above + 1, 6) : 2 });
+  }
+  return out;
+}
+
+/** The text of a note to merge in: no front matter, no leading or trailing blank lines. */
+export function mergeBody(content: string): string {
+  const m = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
+  return (m ? content.slice(m[0].length) : content).replace(/^(?:[ \t\r]*\n)+/, '').replace(/\s+$/, '');
+}
+
+/** What replaces a link line: a heading named after the note, then its text. */
+export function mergedSection(level: number, title: string, body: string): string {
+  return `${'#'.repeat(level)} ${title}${body ? '\n\n' + body : ''}`;
+}

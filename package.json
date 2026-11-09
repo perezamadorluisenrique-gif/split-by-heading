@@ -1,6 +1,6 @@
 {
   "name": "split-by-heading",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Split by Heading for Obsidian - Split a note into one note per heading, with links back in the source.",
   "main": "main.js",
   "scripts": {

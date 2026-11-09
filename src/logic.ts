@@ -32,16 +32,14 @@ export interface Change {
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
-/** Every ATX heading outside front matter and code blocks, in order. */
-export function findHeadings(text: string): Heading[] {
-  const out: Heading[] = [];
+/** Lines outside front matter and code blocks, with the offset of each line start (a trailing \r is dropped). */
+function* bodyLines(text: string): Generator<{ clean: string; offset: number }> {
   let offset = 0;
   let fence: string | null = null;
   let inFront = false;
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const lineEnd = offset + line.length;
     const clean = line.replace(/\r$/, '');
     if (i === 0 && clean === '---') {
       inFront = true;
@@ -52,14 +50,19 @@ export function findHeadings(text: string): Heading[] {
       if (m && m[1][0] === fence[0] && m[1].length >= fence.length && clean.trim() === m[1]) fence = null;
     } else {
       const f = FENCE.exec(clean);
-      if (f) {
-        fence = f[1];
-      } else {
-        const m = HEADING.exec(clean);
-        if (m) out.push({ level: m[1].length, text: m[2].trim(), from: offset, lineEnd: offset + clean.length });
-      }
+      if (f) fence = f[1];
+      else yield { clean, offset };
     }
-    offset = lineEnd + 1;
+    offset += line.length + 1;
+  }
+}
+
+/** Every ATX heading outside front matter and code blocks, in order. */
+export function findHeadings(text: string): Heading[] {
+  const out: Heading[] = [];
+  for (const { clean, offset } of bodyLines(text)) {
+    const m = HEADING.exec(clean);
+    if (m) out.push({ level: m[1].length, text: m[2].trim(), from: offset, lineEnd: offset + clean.length });
   }
   return out;
 }
@@ -166,4 +169,61 @@ export function applyChanges(text: string, changes: Change[]): string {
   let out = text;
   for (const c of [...changes].sort((a, b) => b.from - a.from)) out = out.slice(0, c.from) + c.insert + out.slice(c.to);
   return out;
+}
+
+export interface LinkLine {
+  /** Start and end of the line that holds only the link. */
+  from: number;
+  to: number;
+  /** Path of the linked note as written (URL-decoded for Markdown links). */
+  target: string;
+  embed: boolean;
+}
+
+// A line that is only a link to a whole note: [[Note]], ![[Note]], [[Note|alias]], [x](Note.md). Links to a heading or block are not whole notes.
+const WIKI_LINE = /^[ \t]*(!?)\[\[([^\]|#^]+)(?:\|[^\]]*)?\]\][ \t]*$/;
+const MD_LINE = /^[ \t]*(!?)\[[^\]]*\]\(<?([^)<>#]+\.md)>?\)[ \t]*$/i;
+
+function decode(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Lines that hold only a link or embed to a note, outside front matter and code blocks: what a split leaves behind. */
+export function findLinkLines(text: string): LinkLine[] {
+  const out: LinkLine[] = [];
+  for (const { clean, offset } of bodyLines(text)) {
+    const w = WIKI_LINE.exec(clean);
+    const m = w ? null : MD_LINE.exec(clean);
+    if (w) out.push({ from: offset, to: offset + clean.length, target: w[2].trim(), embed: w[1] === '!' });
+    else if (m) out.push({ from: offset, to: offset + clean.length, target: decode(m[2].trim()), embed: m[1] === '!' });
+  }
+  return out;
+}
+
+/** Level for a merged section: one deeper than the nearest heading above `offset` (at most 6), or 1 with none. */
+export function mergeLevel(text: string, offset: number): number {
+  let level = 0;
+  for (const h of findHeadings(text)) if (h.from < offset) level = h.level;
+  return Math.min(level + 1, 6);
+}
+
+/** A note's text without its front matter, trimmed. */
+export function bodyOf(content: string): string {
+  const m = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
+  return (m ? content.slice(m[0].length) : content).trim();
+}
+
+/** The reverse of a split: each link line becomes a heading named after its note, followed by that note's text. */
+export function buildMerge(text: string, links: LinkLine[], titles: string[], contents: string[]): Change[] {
+  return links.map((l, i) => {
+    const body = bodyOf(contents[i]);
+    const heading = `${'#'.repeat(mergeLevel(text, l.from))} ${titles[i]}`;
+    return { from: l.from, to: l.to, insert: body ? `${heading}
+
+${body}` : heading };
+  });
 }

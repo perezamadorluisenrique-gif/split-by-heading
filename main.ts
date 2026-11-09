@@ -1,8 +1,8 @@
 import { Editor, FuzzySuggestModal, Notice, Plugin, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import type { App, MarkdownFileInfo, MarkdownView, SettingDefinitionItem, TFile } from 'obsidian';
 
-import { buildChanges, levelCounts, noteContent, noteNames, sectionAt, sectionsAtLevel } from './src/logic.ts';
-import type { Leave, Section } from './src/logic.ts';
+import { buildChanges, buildMerge, findLinkLines, levelCounts, noteContent, noteNames, sectionAt, sectionsAtLevel } from './src/logic.ts';
+import type { Leave, LinkLine, Section } from './src/logic.ts';
 
 interface SplitSettings {
   /** Folder for the new notes; empty means the folder of the note being split. */
@@ -62,6 +62,34 @@ export default class SplitByHeadingPlugin extends Plugin {
         void this.split(editor, ctx, [section]);
       },
     });
+    this.addCommand({
+      id: 'merge-here',
+      name: 'Merge linked note back (link on this line)',
+      icon: 'merge',
+      editorCallback: (editor, ctx) => {
+        const text = editor.getValue();
+        const at = editor.posToOffset(editor.getCursor());
+        const link = findLinkLines(text).find((l) => l.from <= at && at <= l.to);
+        if (!link) {
+          new Notice('Put the cursor on a line that holds only a link to a note.');
+          return;
+        }
+        void this.merge(editor, ctx, [link]);
+      },
+    });
+    this.addCommand({
+      id: 'merge-all',
+      name: 'Merge all linked notes back (links on their own line)',
+      icon: 'combine',
+      editorCallback: (editor, ctx) => {
+        const links = findLinkLines(editor.getValue());
+        if (links.length === 0) {
+          new Notice('No line holds only a link to a note.');
+          return;
+        }
+        void this.merge(editor, ctx, links);
+      },
+    });
   }
 
   private pickLevel(editor: Editor, ctx: MarkdownView | MarkdownFileInfo) {
@@ -115,6 +143,40 @@ export default class SplitByHeadingPlugin extends Plugin {
       changes: changes.map((c) => ({ from: editor.offsetToPos(c.from), to: editor.offsetToPos(c.to), text: c.insert })),
     });
     new Notice(`Split into ${created.length} ${created.length === 1 ? 'note' : 'notes'}. Undo restores the source note only.`);
+  }
+
+  /**
+   * The reverse of a split: each link line becomes a heading with the linked note's text, then those notes go to the trash.
+   * The source changes in one editor transaction; the notes are trashed only after it is applied.
+   */
+  private async merge(editor: Editor, ctx: MarkdownView | MarkdownFileInfo, links: LinkLine[]) {
+    const source = ctx.file;
+    if (!source) return;
+    const original = editor.getValue();
+    const used: LinkLine[] = [];
+    const files: TFile[] = [];
+    for (const l of links) {
+      const f = this.app.metadataCache.getFirstLinkpathDest(l.target, source.path);
+      if (f && f.extension === 'md' && f.path !== source.path) {
+        used.push(l);
+        files.push(f);
+      }
+    }
+    if (used.length === 0) {
+      new Notice('Those links do not point to other notes.');
+      return;
+    }
+    const contents = await Promise.all(files.map((f) => this.app.vault.read(f)));
+    if (editor.getValue() !== original) {
+      new Notice('The note changed while merging. Nothing was changed; try again.');
+      return;
+    }
+    const changes = buildMerge(original, used, files.map((f) => f.basename), contents);
+    editor.transaction({
+      changes: changes.map((c) => ({ from: editor.offsetToPos(c.from), to: editor.offsetToPos(c.to), text: c.insert })),
+    });
+    await this.discard([...new Set(files)]);
+    new Notice(`Merged ${used.length} ${used.length === 1 ? 'note' : 'notes'} and moved ${used.length === 1 ? 'it' : 'them'} to the trash. Undo restores the source note only.`);
   }
 
   private async discard(files: TFile[]) {

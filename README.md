@@ -6,7 +6,7 @@ Split a note into one note per heading, with links back in the source.
 
 ## Usage
 
-Two commands, both in the command palette:
+Four commands, all in the command palette. Two split a note:
 
 - **Split note by headings (pick level)**: choose a heading level (the picker shows how many notes each level makes) and every heading of that level becomes its own note. Deeper headings stay inside their note.
 - **Split note here (heading above)**: splits only the section under the nearest heading above the cursor.
@@ -17,7 +17,14 @@ The source note is changed in one editor step, so Undo brings it back; the new n
 
 Links from other notes to a heading or block of the source (`[[Note#Heading]]`, `[[Note#^id]]`) are not rewritten and will need updating. If you choose a different folder, relative Markdown links inside the moved text (`[x](../file.md)`) are not rewritten either; wikilinks keep working.
 
-To pull out just a selection, or to merge notes, use Obsidian's core Note composer.
+Two put it back together:
+
+- **Merge linked note back (link on this line)**: when the cursor is on a line that holds only a link or embed to a note (what a split leaves behind), the line becomes a heading named after that note, one level below the heading above it, followed by the note's text (its front matter is dropped).
+- **Merge all linked notes back (links on their own line)**: does that for every such line in the note.
+
+The source is changed in one editor step, so Undo brings it back; the merged notes are then moved to the trash (as Obsidian's "Deleted files" setting says), so they can be recovered from there. Links to a heading or block (`[[Note#Heading]]`), links inside text and links in code blocks are left alone.
+
+To pull out just a selection, use Obsidian's core Note composer.
 
 ## Installation
 

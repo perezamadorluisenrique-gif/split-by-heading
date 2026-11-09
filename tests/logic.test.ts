@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyChanges, buildChanges, findHeadings, levelCounts, noteContent, noteNames, safeFileName, sectionAt, sectionsAtLevel } from '../src/logic.ts';
+import { applyChanges, bodyOf, buildChanges, buildMerge, findHeadings, findLinkLines, mergeLevel, levelCounts, noteContent, noteNames, safeFileName, sectionAt, sectionsAtLevel } from '../src/logic.ts';
 
 const DOC = ['Intro line', '', '## One', 'a', '', '### Deep', 'b', '', '## Two', 'c', '', '# Top', 'd', ''].join('\n');
 
@@ -78,4 +78,46 @@ test('noteNames avoids vault names and repeated headings, ignoring case', () => 
     noteNames(['Notes', 'notes', 'Other', 'Notes'], (n) => n === 'Other'),
     ['Notes', 'notes 2', 'Other 2', 'Notes 3'],
   );
+});
+
+test('findLinkLines finds lines that hold only a link to a whole note', () => {
+  const text = ['---', '[[Front]]', '---', '# Top', '[[One]]', '', '![[Two|alias]]', 'text [[Inline]]', '[[Note#Head]]', '[[Note^id]]', '[Three](Sub%20Dir/Three.md)', '```', '[[Code]]', '```', '  [[Four]]  '].join('\n');
+  assert.deepEqual(
+    findLinkLines(text).map((l) => [text.slice(l.from, l.to).trim(), l.target, l.embed]),
+    [
+      ['[[One]]', 'One', false],
+      ['![[Two|alias]]', 'Two', true],
+      ['[Three](Sub%20Dir/Three.md)', 'Sub Dir/Three.md', false],
+      ['[[Four]]', 'Four', false],
+    ],
+  );
+});
+
+test('mergeLevel is one deeper than the heading above, capped at 6, 1 with none', () => {
+  const text = ['[[A]]', '# T', '[[B]]', '## U', '[[C]]', '###### V', '[[D]]'].join('\n');
+  const at = (s: string) => text.indexOf(s);
+  assert.deepEqual([at('[[A]]'), at('[[B]]'), at('[[C]]'), at('[[D]]')].map((o) => mergeLevel(text, o)), [1, 2, 3, 6]);
+});
+
+test('bodyOf drops front matter and trims', () => {
+  assert.equal(bodyOf('---\ntags: a\n---\n\nText\n\n'), 'Text');
+  assert.equal(bodyOf('\n No front\n'), 'No front');
+  assert.equal(bodyOf('---\nonly: yes\n---\n'), '');
+});
+
+test('merge puts each split note back under a heading', () => {
+  const sections = sectionsAtLevel(DOC, 2);
+  const names = noteNames(sections.map((s) => s.title), () => false);
+  const split = applyChanges(DOC, buildChanges(DOC, sections, names.map((n) => `[[${n}]]`), 'link'));
+  const lines = findLinkLines(split);
+  assert.equal(lines.length, 2);
+  const merged = applyChanges(split, buildMerge(split, lines, names, sections.map(noteContent)));
+  // No heading above the links, so they come back as level 1.
+  assert.equal(merged, ['Intro line', '', '# One', '', 'a', '', '### Deep', 'b', '', '# Two', '', 'c', '', '# Top', 'd', ''].join('\n'));
+});
+
+test('an empty note merges as a bare heading', () => {
+  const text = '## Up\n[[Empty]]\n';
+  const [l] = findLinkLines(text);
+  assert.equal(applyChanges(text, buildMerge(text, [l], ['Empty'], [''])), '## Up\n### Empty\n');
 });

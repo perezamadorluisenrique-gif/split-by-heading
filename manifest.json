@@ -1,0 +1,10 @@
+{
+  "id": "split-by-heading",
+  "name": "Split by Heading",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.6",
+  "description": "Split a note into one note per heading, with links back in the source.",
+  "author": "Siulved54",
+  "authorUrl": "https://github.com/perezamadorluisenrique-gif",
+  "isDesktopOnly": false
+}
